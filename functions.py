@@ -1,8 +1,8 @@
 import time
 from datetime import datetime
-from biosppy import ecg
+from biosppy import ecg, eda
 import numpy as np
-from scipy import interpolate, signal
+from scipy import interpolate, signal, stats
 import matplotlib.pyplot as plt
 from matplotlib import style
 import matplotlib.patches as mpatches
@@ -78,11 +78,13 @@ def extract_ecg_features(ecgFile, ecgFeatFile, freq, stage, winSize, shift):
                         for i in range(0, numOfFeatures):
                             features.append('n\t')
                     else:
+                        # Calculate RR intervals
                         rrList = []
                         for i in range(1, len(window[2])):
                             rr = window[0][window[2][i]] - window[0][window[2][i - 1]]
                             rrList.append(rr)
 
+                        # Calculate RMSSD that is heart rate variability (HRV)
                         hrvList = [0]
                         if rrList:
                             if len(rrList) > 1:
@@ -112,9 +114,190 @@ def extract_ecg_features(ecgFile, ecgFeatFile, freq, stage, winSize, shift):
                 valid_cnt = 0
                 invalid_cnt = 0
 
-def extract_gsr_features(gsrFile, gsrFeatFile, winSize, shift):
-    ### Store timestamps of CHECKs to buffer
-    timearray = []
+def extract_gsr_features(gsrFile, gsrFeatFile, freq, stage, winSize, shift):
+    onesets_threshold = 0.1
+    numOfFeatures = 38
+    EDA = [] # total
+    stageEDA = [] # part corresponding to each stage
+    beforeEDA = 0
+    while True:
+        line = gsrFile.readline()  # 라인 by 라인으로 데이터 읽어오기
+        if not line:
+            # print(" End Of Emp GSR File")
+            break
+        lineData = [x.strip() for x in line.split(',')]
+
+        # triple redundancy because 4 Hz EDA data cannot be progressed by eda in biosppy (only works for more than or equal to 10 Hz)
+        if lineData[1] != '' and float(lineData[1]) != 0:
+            EDA.append(float(lineData[1]))
+            EDA.append(float(lineData[1]))
+            EDA.append(float(lineData[1]))
+            beforeEDA = float(lineData[1])
+
+            stageEDA.append(float(lineData[1]))
+            stageEDA.append(float(lineData[1]))
+            stageEDA.append(float(lineData[1]))
+        else:
+            EDA.append(beforeEDA)
+            EDA.append(beforeEDA)
+            EDA.append(beforeEDA)
+
+            stageEDA.append(beforeEDA)
+            stageEDA.append(beforeEDA)
+            stageEDA.append(beforeEDA)
+
+    allEDA = eda.eda(signal=EDA, sampling_rate=freq * 3, show=False)  # 3 represents triple redundancy
+    if not stageEDA:
+        slope = 0
+    else:
+        x = []
+        for j in range(len(stageEDA)):
+            x.append(j)
+        s, intercept, r_value, p_value, std_err = stats.linregress(x, stageEDA)
+        slope = s
+
+    gsrFile.seek(0, 0)
+
+    EDA_max = np.max(allEDA[1])
+    EDA_min = np.min(allEDA[1])
+    windowEDAList = []
+    windowOnSetList = []
+    windowPeakList = []
+    windowAmplitudeList = []
+    mappingList = []
+    window_begin = -1
+    cnt = 0
+    onset = -1
+    loop_count = 0
+    last_level = 1
+    firstRead = 0
+    firstTime = -1
+    while True:
+        line = gsrFile.readline()  # 라인 by 라인으로 데이터 읽어오기
+        if not line:
+            # print(" End Of Emp GSR File")
+            break
+        lineData = [x.strip() for x in line.split(',')]
+        currentTime = float(lineData[0])
+        if firstRead == 0:
+            firstTime = currentTime
+            firstRead = 1
+
+        if firstTime + shift <= currentTime:
+
+            if window_begin == -1:
+                window_begin = currentTime
+
+            # need to examine 3 consecutive data for one timestamp since we duplicate raw data above 3 times
+            for k in range(0,3):
+                windowEDAList.append(allEDA[1][cnt + k])
+                for i in range(0, len(allEDA[2])):  # examine if current EDA was determined as onset or not
+                    if (cnt + k) == allEDA[2][i]:
+                        onset = 1
+                if onset == 1:  # if current EDA was determined as onset
+                    if allEDA[1][
+                        cnt + k] > onesets_threshold:  # AND if magnitude of current EDA is higher than threshold
+                        onset_height = allEDA[1][cnt + k]
+                        windowOnSetList.append(allEDA[1][cnt + k])  # store it in the onset list for current window
+                        peak_height = np.max(allEDA[1][cnt + k:cnt + k + 50])
+                        if peak_height > onset_height:  # Peak's height does not exist under Onset's height
+                            windowPeakList.append(peak_height)  # store it in the peak list for current window
+                            windowAmplitudeList.append(peak_height - onset_height)  # store it in the SCR amplitude list for current window
+                        else:
+                            windowPeakList.append(0)  # store it in the peak list for current window
+                            windowAmplitudeList.append(
+                                0)  # store it in the SCR amplitude list for current window
+                onset = -1
+            if currentTime - window_begin >= winSize:
+                features = []
+                loop_count += 1
+                if windowEDAList.count(windowEDAList[0]) == winSize * 12:  # bad EDA period (constant line which is artificial)
+                    for i in range(0, numOfFeatures):  # 38 dummy features
+                        features.append('n\t')
+                else:  # not bad EDA period
+                    ###level Feature
+                    Normal_windowEDAList = [Normalization(i, EDA_min, EDA_max) for i in windowEDAList]
+                    ###subsampling in 5sec (60 sample)
+                    subsampling = [np.mean(Normal_windowEDAList[i - 60:i]) for i in
+                                   range(60, len(Normal_windowEDAList) + 1, 60)]
+                    area = sum(subsampling)
+                    # Dividing normalized EDA data into 5 states
+                    for i in subsampling:
+                        if i <= 0.2:
+                            mappingList.append(1)
+                        elif i <= 0.4:
+                            mappingList.append(2)
+                        elif i <= 0.6:
+                            mappingList.append(3)
+                        elif i <= 0.8:
+                            mappingList.append(4)
+                        else:
+                            mappingList.append(5)
+                    # global last_level
+                    if loop_count == 1:
+                        last_level = mappingList[0]
+                    arou_num = unarou_num = 0
+                    # number of arousing and unarousing moments and ratio between arousing, unarousing
+                    for i in range(len(mappingList)):
+                        if i == 0:
+                            if mappingList[i] - last_level >= 1:
+                                arou_num += 1
+                            else:
+                                unarou_num += 1
+                        else:
+                            if mappingList[i] - mappingList[i - 1] >= 1:
+                                arou_num += 1
+                            else:
+                                unarou_num += 1
+                    last_level = mappingList[len(mappingList) - 1]
+
+                    # Total of 38 Features
+                    # min-per20-med-per80-max-mean-std (EDA) 7
+                    features.append(str(np.min(windowEDAList)) + "\t" + str(np.percentile(windowEDAList, 20)) + "\t" + str(np.median(windowEDAList)) + "\t" + str(np.percentile(windowEDAList, 80)) + "\t" \
+                        + str(np.max(windowEDAList)) + "\t" + str(np.mean(windowEDAList)) + "\t" + str(np.std(windowEDAList)) + "\t")
+
+                    if len(windowOnSetList) != 0:  # onSet appears!
+                        # min-per20-med-per80-max-mean-std-num (onset) 8
+                        # min-per20-med-per80-max-mean-std (peak) 7
+                        # min-per20-med-per80-max-mean-std (amplitude) 7
+                        features.append(str(np.min(windowOnSetList)) + "\t" + str(np.percentile(windowOnSetList, 20)) + "\t" + str(np.median(windowOnSetList)) + "\t" + str(np.percentile(windowOnSetList, 80)) + "\t" \
+                                   + str(np.max(windowOnSetList)) + "\t" + str(np.mean(windowOnSetList)) + "\t" + str(np.std(windowOnSetList)) + "\t" + str(len(windowOnSetList)) + "\t" \
+                                   + str(np.min(windowPeakList)) + "\t" + str(np.percentile(windowPeakList, 20)) + "\t" + str(np.median(windowPeakList)) + "\t" + str(np.percentile(windowPeakList, 80)) + "\t" \
+                                   + str(np.max(windowPeakList)) + "\t" + str(np.mean(windowPeakList)) + "\t" + str(np.std(windowPeakList)) + "\t" \
+                                   + str(np.min(windowAmplitudeList)) + "\t" + str(np.percentile(windowAmplitudeList, 20)) + "\t" + str(np.median(windowAmplitudeList)) + "\t" + str(np.percentile(windowAmplitudeList, 80)) + "\t" \
+                                   + str(np.max(windowAmplitudeList)) + "\t" + str(np.mean(windowAmplitudeList)) + "\t" + str(np.std(windowAmplitudeList)) + "\t")
+                    else:
+                        for k in range(8+7+7):
+                            features.append(str(0) + "\t")
+
+                    # level_i (1,2,3,4,5) -> Ratio between the number of level_i and for each 30 second window 5
+                    # mean of level, area of subsampling 2
+                    features.append(str(mappingList.count(1) / len(mappingList)) + "\t" + str(mappingList.count(2) / len(mappingList)) + "\t" \
+                                   + str(mappingList.count(3) / len(mappingList)) + "\t" + str(mappingList.count(4) / len(mappingList)) + "\t" \
+                                   + str(mappingList.count(5) / len(mappingList)) + "\t" + str(np.mean(mappingList)) + "\t" + str(area) + "\t")
+
+                    # sign bit of slope (EDA) & slope (EDA)
+                    if slope > 0:
+                        features.append("1\t" + str(slope) + "\t")
+                    elif slope < 0:
+                        features.append("-1\t" + str(slope) + "\t")
+                    else:
+                        features.append("0\t" + str(slope) + "\t")
+                # label
+                features.append(stage + "\n")
+                gsrFeatFile.write(''.join(features))
+
+                window_begin = -1
+                windowEDAList = []
+                windowOnSetList = []
+                windowPeakList = []
+                windowAmplitudeList = []
+                Normal_windowEDAList = []
+                mappingList = []
+            cnt += 3
+
+def Normalization(value, vmin, vmax):
+    return (value - vmin) / (vmax - vmin)
 
 def extract_resp_features(respFile, respFeatFile, winSize, shift):
     ### Store timestamps of CHECKs to buffer
@@ -261,3 +444,4 @@ def frequencyDomain(RRints, band_type=None, lf_bw=0.11, hf_bw=0.1, plot=0):
         plt.show()
 
     return freqDomainFeats
+

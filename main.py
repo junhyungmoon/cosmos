@@ -64,4 +64,6 @@ if extractFlag:
                     winSize = 30
                     shift = 0
                     extract_ecg_features(srcFile, destFile, freq, stage, winSize, shift)
+                    srcFile.close()
+                    destFile.close()
 
