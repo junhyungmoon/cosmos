@@ -9,6 +9,7 @@ import matplotlib.patches as mpatches
 from collections import OrderedDict
 import sys
 
+
 def countChecks(timestampFilePath, stageLabelList):
     timestampFile = open(timestampFilePath, "r")
     lines = timestampFile.readlines()
@@ -16,6 +17,7 @@ def countChecks(timestampFilePath, stageLabelList):
     if len(stageLabelList)*2 != len(lines):
         return 0
     return 1
+
 
 def crop_stages(inFile, outFilePath, timestampList, stageLabelList):
     outFileList = []
@@ -30,7 +32,11 @@ def crop_stages(inFile, outFilePath, timestampList, stageLabelList):
             break
         lineData = [x.strip() for x in line.split(',')]
         for a in range(len(stageLabelList)):
-            if timestampList[a*2] <= float(lineData[0]) <= timestampList[a*2+1]:
+            beginTime = timestampList[a*2] + 15 # discard initial data (15 seconds)
+            endTime = timestampList[a*2+1] - 15 # discard last data (15 seconds)
+            if a == 0 or a == len(stageLabelList) - 1: # first (r1) or last (r2) whose duration is 10 minutes which is larger than 5 minutes
+                beginTime = timestampList[a*2] + 300 # 300seconds = 5minutes
+            if beginTime <= float(lineData[0]) <= endTime:
                 stageIdx = a
                 break
             else:
@@ -40,6 +46,7 @@ def crop_stages(inFile, outFilePath, timestampList, stageLabelList):
 
     for fileIdx in range(len(stageLabelList)):
         outFileList[fileIdx].close()
+
 
 def extract_ecg_features(ecgFile, ecgFeatFile, freq, stage, winSize, shift):
     threshold = 0.2  # threshold for invalid window Ex) 0.2 represents 20%
@@ -265,6 +272,7 @@ def extract_gsr_features(gsrFile, gsrFeatFile, freq, stage, winSize, shift):
     EDA = [] # total
     stageEDA = [] # part corresponding to each stage
     beforeEDA = 0
+    copyConst = 3
     while True:
         line = gsrFile.readline()  # 라인 by 라인으로 데이터 읽어오기
         if not line:
@@ -274,24 +282,16 @@ def extract_gsr_features(gsrFile, gsrFeatFile, freq, stage, winSize, shift):
 
         # triple redundancy because 4 Hz EDA data cannot be progressed by eda in biosppy (only works for more than or equal to 10 Hz)
         if lineData[1] != '' and float(lineData[1]) != 0:
-            EDA.append(float(lineData[1]))
-            EDA.append(float(lineData[1]))
-            EDA.append(float(lineData[1]))
+            for y in range(copyConst):
+                EDA.append(float(lineData[1]))
+                stageEDA.append(float(lineData[1]))
             beforeEDA = float(lineData[1])
-
-            stageEDA.append(float(lineData[1]))
-            stageEDA.append(float(lineData[1]))
-            stageEDA.append(float(lineData[1]))
         else:
-            EDA.append(beforeEDA)
-            EDA.append(beforeEDA)
-            EDA.append(beforeEDA)
+            for y in range(copyConst):
+                EDA.append(beforeEDA)
+                stageEDA.append(beforeEDA)
 
-            stageEDA.append(beforeEDA)
-            stageEDA.append(beforeEDA)
-            stageEDA.append(beforeEDA)
-
-    allEDA = eda.eda(signal=EDA, sampling_rate=freq * 3, show=False)  # 3 represents triple redundancy
+    allEDA = eda.eda(signal=EDA, sampling_rate=freq * copyConst, show=False)  # 3 represents triple redundancy
     if not stageEDA:
         slope = 0
     else:
@@ -333,8 +333,8 @@ def extract_gsr_features(gsrFile, gsrFeatFile, freq, stage, winSize, shift):
             if window_begin == -1:
                 window_begin = currentTime
 
-            # need to examine 3 consecutive data for one timestamp since we duplicate raw data above 3 times
-            for k in range(0,3):
+            # need to examine 'copyConst' consecutive data for one timestamp since we duplicate raw data above 'copyConst' times
+            for k in range(0,copyConst):
                 windowEDAList.append(allEDA[1][cnt + k])
                 for i in range(0, len(allEDA[2])):  # examine if current EDA was determined as onset or not
                     if (cnt + k) == allEDA[2][i]:
@@ -441,8 +441,10 @@ def extract_gsr_features(gsrFile, gsrFeatFile, freq, stage, winSize, shift):
                 mappingList = []
             cnt += 3
 
+
 def Normalization(value, vmin, vmax):
     return (value - vmin) / (vmax - vmin)
+
 
 def extract_resp_features(respFile, respFeatFile, freq, stage, winSize, shift):
     threshold = 0.2  # threshold for invalid window Ex) 0.2 represents 20%
@@ -686,6 +688,7 @@ def extract_resp_features(respFile, respFeatFile, freq, stage, winSize, shift):
             window_begin = -1
             windowList = []
 
+
 def peakdet(v, delta, x=None):
     maxtab = []
     mintab = []
@@ -723,6 +726,7 @@ def peakdet(v, delta, x=None):
                 lookformax = True
     return np.array(maxtab), np.array(mintab)
 
+
 def flatten(x):
     basestring = (str, bytes)
     result = []
@@ -734,6 +738,7 @@ def flatten(x):
             # 이터러블이 아니거나 스트링인 경우 - 그냥 append
             result.append(el)
     return result
+
 
 def smoothing(waves, data, size, step):
     # check input
@@ -750,6 +755,7 @@ def smoothing(waves, data, size, step):
     waves = [np.mean(data[i - size:i + size + 1]) for i in range(0, len(data))]
     waves = [x for x in waves if str(x) != 'nan']
     return waves
+
 
 def MAC(waves2, data, size, step):
     # check inputs
