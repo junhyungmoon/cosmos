@@ -5,17 +5,22 @@ from codes.functions import countChecks, crop_stages, extract_ecg_features, extr
 examineFlag = 0
 cropFlag = 0
 extractFlag = 0
-parseFlag = 1
+parseFlag = 0
+analyzeFlag = 1
 
 ### Global variables ###
 PcortisolScoreList = [3,4,6,7,9,10,11,12,13,14,16,17,18,20,21,23,24,26,28,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,63,64,65,100]# Indices of 40 subjects
+femaleList = [3,14,17,24,31,33,36,37,38,39,40,41,43,44,45,46,63] # 17
+maleList = [4,6,7,9,10,11,12,13,16,18,20,21,23,26,28,30,32,34,35,42,64,65,100] # 23
+twentyList = [3,4,6,7,9,10,11,12,13,14,18,20,21,23,24,26,28,30,31,32,34,35,36,38,39,40,42,43,44,45,64,65,100] # 33
+thirtyList = [16,17,33,37,41,46,63] # 7
 # Feature extraction error: 17(ck), 20(s2), 65('vs', 'e1', 'e2', 'r2') in E_gsr
 # 17 - no reason
 # 20 - invalid data for 's2' in E_gsr
 # 65 - invalid data for 'vs', 'e1', 'e2', 'r2' in E_gsr
 postfixList = ['Z_bre','Z_ecg']#'E_gsr']#,
 #rootPath = "E:\mjh\study\cosmos\data\\2nd_exp\\"
-rootPath = "E:\mjh\study\\bibm\\features\\15\\"
+rootPath = "E:\mjh\study\\bibm\\features\\"
 sensorFilePath = rootPath
 timeFilePath = rootPath + "timestamp\\"
 stageLabelList = ['r1', 'ck', 's1', 'ip', 'ie', 's2', 'vs', 'e1', 'e2', 'r2'] #
@@ -90,7 +95,7 @@ if extractFlag:
                     destFile.close()
 
 
-# 4. Examine features according to each experimental stage
+# 4. Examine important features according to each experimental stage for each individual
 if parseFlag:
     # the most important features in each sensor
     # edamean (6번째)
@@ -127,3 +132,35 @@ if parseFlag:
                         featureBuf.append(str(sum/cnt)+"\t")
                     srcFile.close()
             print(''.join(featureBuf))
+
+if analyzeFlag:
+    try:
+        srcFile = open(''.join([sensorFilePath, 'idx_age_sex_scores_cortisols_edamean_inspmin_rrmin.txt']), "r")
+        # idx_age_sex_scores(9)_cortisols(3)_edamean(9)_inspmin(9)_rrmin(9)
+    except FileNotFoundError as e:
+        print("No file error")
+    else:
+        line = srcFile.readline()
+        lineData = [x.strip() for x in line.split('\t')]
+        srcFile.seek(0,0)
+        dataBuf = []
+        cntBuf = []
+        for k in range(len(lineData)-3): #exclude idx, age, and sex
+            dataBuf.append(0)
+            cntBuf.append(0)
+
+        while True:
+            line = srcFile.readline()
+            if not line:
+                break
+            lineData = [x.strip() for x in line.split('\t')]
+            if int(lineData[0]) in femaleList:
+                for k in range(3, len(lineData)):
+                    if lineData[k] != 'n':
+                        dataBuf[k-3] += float(lineData[k])
+                        cntBuf[k-3] += 1
+
+        for k in range(len(lineData)-3): #exclude idx, age, and sex
+            dataBuf[k] = str(dataBuf[k]/cntBuf[k]) + "\t"
+        print(''.join(dataBuf))
+        srcFile.close()
