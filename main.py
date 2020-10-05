@@ -1,4 +1,6 @@
-from numpy import *
+#from numpy import *
+import numpy as np
+import scipy.stats
 from codes.functions import countChecks, crop_stages, extract_ecg_features, extract_gsr_features, extract_resp_features
 
 # Flags
@@ -6,14 +8,17 @@ examineFlag = 0
 cropFlag = 0
 extractFlag = 0
 parseFlag = 0
-analyzeFlag = 1
+analyzeFlag = 0
+correlFlag = 1
 
 ### Global variables ###
 PcortisolScoreList = [3,4,6,7,9,10,11,12,13,14,16,17,18,20,21,23,24,26,28,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,63,64,65,100]# Indices of 40 subjects
+
 femaleList = [3,14,17,24,31,33,36,37,38,39,40,41,43,44,45,46,63] # 17
 maleList = [4,6,7,9,10,11,12,13,16,18,20,21,23,26,28,30,32,34,35,42,64,65,100] # 23
 twentyList = [3,4,6,7,9,10,11,12,13,14,18,20,21,23,24,26,28,30,31,32,34,35,36,38,39,40,42,43,44,45,64,65,100] # 33
 thirtyList = [16,17,33,37,41,46,63] # 7
+randList = [5,9,10,13,16,23,24,25,26,28,29,30,31,32,33,34,35,36,38,39] #20
 # Feature extraction error: 17(ck), 20(s2), 65('vs', 'e1', 'e2', 'r2') in E_gsr
 # 17 - no reason
 # 20 - invalid data for 's2' in E_gsr
@@ -154,7 +159,7 @@ if analyzeFlag:
             if not line:
                 break
             lineData = [x.strip() for x in line.split('\t')]
-            if int(lineData[0]) in femaleList:
+            if int(lineData[0]) in randList:
                 for k in range(3, len(lineData)):
                     if lineData[k] != 'n':
                         dataBuf[k-3] += float(lineData[k])
@@ -163,4 +168,71 @@ if analyzeFlag:
         for k in range(len(lineData)-3): #exclude idx, age, and sex
             dataBuf[k] = str(dataBuf[k]/cntBuf[k]) + "\t"
         print(''.join(dataBuf))
+        #for a in range(20):
+            #print(random.randint(1,41))
         srcFile.close()
+
+if correlFlag:
+    try:
+        srcFile = open(''.join([sensorFilePath, 'idx_age_sex_scores_cortisols_edamean_inspmin_rrmin.txt']), "r")
+        # idx_age_sex_scores(9)_cortisols(3)_edamean(9)_inspmin(9)_rrmin(9)
+    except FileNotFoundError as e:
+        print("No file error")
+    else:
+        line = srcFile.readline()
+        lineData = [x.strip() for x in line.split('\t')]
+        srcFile.seek(0,0)
+
+        allBuf = []
+        femaleBuf = []
+        maleBuf = []
+        twentyBuf = []
+        thirtyBuf = []
+        randBuf = []
+
+        while True:
+            line = srcFile.readline()
+            if not line:
+                break
+            lineData = [x.strip() for x in line.split('\t')]
+            # 20, 36, 65 invalid values in several stages (feature - edamean, inspmin, RRmin)
+            if int(lineData[0]) not in [20, 36, 65]:
+                if int(lineData[0]) in PcortisolScoreList:
+                    allBuf.append([float(i) for i in lineData[3:]]) # idx, age, sex
+                if int(lineData[0]) in femaleList:
+                    femaleBuf.append([float(i) for i in lineData[3:]]) # idx, age, sex
+                if int(lineData[0]) in maleList:
+                    maleBuf.append([float(i) for i in lineData[3:]])
+                if int(lineData[0]) in twentyList:
+                    twentyBuf.append([float(i) for i in lineData[3:]])
+                if int(lineData[0]) in thirtyList:
+                    thirtyBuf.append([float(i) for i in lineData[3:]])
+                if int(lineData[0]) in randList:
+                    randBuf.append([float(i) for i in lineData[3:]])
+        srcFile.close()
+
+        srcList = [allBuf, femaleBuf, maleBuf, twentyBuf, thirtyBuf, randBuf]
+        destList = [allBuf, femaleBuf, maleBuf, twentyBuf, thirtyBuf, randBuf]
+
+        for src in srcList:
+            avgCoeff = 0
+            cnt = 0
+            for a in range(len(src)):
+                for b in range(len(src)):
+                    if a == b:
+                        continue
+                    avgCoeff += scipy.stats.pearsonr(np.array(src[a]), np.transpose(np.array(src[b])))[0]
+                    cnt += 1
+            print(avgCoeff/cnt)
+
+        for src in srcList:
+            for dest in destList:
+                if src == dest:
+                    continue
+                avgCoeff = 0
+                cnt = 0
+                for a in range(len(src)):
+                    for b in range(len(dest)):
+                        avgCoeff += scipy.stats.pearsonr(np.array(src[a]), np.transpose(np.array(dest[b])))[0]
+                        cnt += 1
+                print(avgCoeff/cnt)
